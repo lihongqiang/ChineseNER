@@ -2,22 +2,35 @@ import os
 import tensorflow as tf
 from model import Model
 from loader import load_data
-from utils import BatchManager, test_ner
+from utils import BatchManager, test_ner, write_test
+
+#import sys
+#from imp import reload
+#reload(sys)
+#sys.setdefaultencoding('utf-8')
 
 FLAGS = tf.app.flags.FLAGS
 # path for log, model and result
-tf.app.flags.DEFINE_string("log_path", './log', "path for log files")
-tf.app.flags.DEFINE_string("model_path", './weights', "path to save model")
-tf.app.flags.DEFINE_string("result_path", './results', "path to save result")
-tf.app.flags.DEFINE_string("train_file", './data/SIGHAN.NER.train', "path for train data")
-tf.app.flags.DEFINE_string("dev_file", './data/SIGHAN.NER.dev', "path for valid data")
-tf.app.flags.DEFINE_string("test_file", './data/SIGHAN.NER.test', "path for test data")
+tf.app.flags.DEFINE_string("log_path", './jian_total/log', "path for log files")
+tf.app.flags.DEFINE_string("model_path", './jian_total/models', "path to save model")
+tf.app.flags.DEFINE_string("result_path", './jian_total/results', "path to save result")
+tf.app.flags.DEFINE_string("train_file", './data/train_total.jian', "path for train data")
+#tf.app.flags.DEFINE_string("train_file", './data/SIGHAN.NER.train', "path for train data")
+#tf.app.flags.DEFINE_string("dev_file", './data/SIGHAN.NER.dev', "path for valid data")
+#tf.app.flags.DEFINE_string("test_file", './data/SIGHAN.NER.test', "path for test data")
+tf.app.flags.DEFINE_string("dev_file", './data/test.jian', "path for valid data")
+tf.app.flags.DEFINE_string("test_file", './data/pred.jian', "path for test data")
 # config for model
 tf.app.flags.DEFINE_boolean("lower", True, "True for lowercase all characters")
+#tf.app.flags.DEFINE_string("pre_emb", "./embedding/zh/zh.bin",
+#                           "path for pre-trained embedding, False for randomly initialize")
 tf.app.flags.DEFINE_string("pre_emb", "./embedding/wiki_word2vec.pkl",
                            "path for pre-trained embedding, False for randomly initialize")
-tf.app.flags.DEFINE_integer("min_freq", 2, "")
-tf.app.flags.DEFINE_integer("word_max_len", 100, "maximum words in a sentence")
+
+tf.app.flags.DEFINE_integer("min_freq", 1, "") # #
+
+tf.app.flags.DEFINE_integer("word_max_len", 100, "maximum words in a sentence") # #
+
 tf.app.flags.DEFINE_integer("word_dim", 100, "dimension of char embedding")
 tf.app.flags.DEFINE_integer("word_hidden_dim", 150, "dimension of word LSTM hidden units")
 tf.app.flags.DEFINE_string("feature_dim", 4, "dimension of extra features, 0 for not used")
@@ -26,8 +39,8 @@ tf.app.flags.DEFINE_string("feature_dim", 4, "dimension of extra features, 0 for
 tf.app.flags.DEFINE_float("dropout", 0.5, "dropout rate")
 tf.app.flags.DEFINE_float("clip", 5, "gradient to clip")
 tf.app.flags.DEFINE_float("lr", 0.001, "initial learning rate")
-tf.app.flags.DEFINE_integer("max_epoch", 150, "maximum training epochs")
-tf.app.flags.DEFINE_integer("batch_size", 20, "num of sentences per batch")
+tf.app.flags.DEFINE_integer("max_epoch", 100, "maximum training epochs")
+tf.app.flags.DEFINE_integer("batch_size", 200, "num of sentences per batch")
 tf.app.flags.DEFINE_integer("steps_per_checkpoint", 100, "steps per checkpoint")
 tf.app.flags.DEFINE_integer("valid_batch_size", 100, "num of sentences per batch")
 
@@ -45,7 +58,7 @@ def create_model(session, word_to_id, id_to_tag):
         session.run(tf.global_variables_initializer())
     return model
 
-
+# ~/ CUDA_VISIBLE_DEVICES=0,1 python your.py#使用GPU0,1
 def main(_):
     if not os.path.isdir(FLAGS.log_path):
         os.makedirs(FLAGS.log_path)
@@ -55,13 +68,21 @@ def main(_):
         os.makedirs(FLAGS.result_path)
     tag_to_id = {"O": 0, "B-LOC": 1, "I-LOC": 2,
                  "B-PER": 3, "I-PER": 4, "B-ORG": 5, "I-ORG": 6}
+    
     # load data
-    id_to_word, id_to_tag, train_data, dev_data, test_data = load_data(FLAGS, tag_to_id)
+    print ('loading data')
+    word_to_id, id_to_tag, train_data, dev_data, test_data = load_data(FLAGS, tag_to_id)
     train_manager = BatchManager(train_data, len(id_to_tag), FLAGS.word_max_len, FLAGS.batch_size)
     dev_manager = BatchManager(dev_data, len(id_to_tag), FLAGS.word_max_len, FLAGS.valid_batch_size)
     test_manager = BatchManager(test_data, len(id_to_tag), FLAGS.word_max_len, FLAGS.valid_batch_size)
-    with tf.Session() as sess:
-        model = create_model(sess, id_to_word, id_to_tag)
+    
+    
+    config = tf.ConfigProto(log_device_placement=True, allow_soft_placement=True)
+    config.gpu_options.allow_growth = True
+    
+    with tf.Session(config=config) as sess:
+        model = create_model(sess, word_to_id, id_to_tag)
+        
         loss = 0
         best_test_f1 = 0
         steps_per_epoch = len(train_data) // FLAGS.batch_size + 1
@@ -99,6 +120,7 @@ def main(_):
         model.logger.info("Reading model parameters from %s" % ckpt.model_checkpoint_path)
         model.saver.restore(sess, ckpt.model_checkpoint_path)
         ner_results = model.predict(sess, test_manager)
+#        write_test(ner_results, FLAGS.result_path)
         eval_lines = test_ner(ner_results, FLAGS.result_path)
         for line in eval_lines:
             model.logger.info(line)

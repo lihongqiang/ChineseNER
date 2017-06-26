@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.contrib.crf import crf_log_likelihood, viterbi_decode
-from tensorflow.python.ops import rnn_cell
+from tensorflow.contrib.rnn import core_rnn_cell as rnn_cell
 from utils import get_logger, load_word2vec, calculate_accuracy
 from tensorflow.python.ops import init_ops
 
@@ -41,7 +41,7 @@ class Model(object):
         rnn_inputs = tf.nn.dropout(embedding, self.dropout)
         # concat extra features with embedding
         if self.params.feature_dim:
-            rnn_inputs = tf.concat(2, [rnn_inputs, self.features])
+            rnn_inputs = tf.concat([rnn_inputs, self.features], axis=2)
         # extract features
         rnn_features = self.bilstm_layer(rnn_inputs)
         # projection layer
@@ -57,7 +57,7 @@ class Model(object):
         self.train_op = self.opt.apply_gradients(capped_grads_vars, self.global_step)
         self.saver = tf.train.Saver(tf.global_variables())
 
-    def get_embedding(self, inputs, id_to_word):
+    def get_embedding(self, inputs, word_to_id):
         # embedding layer for input projection
         with tf.variable_scope("Embedding"), tf.device('/cpu:0'):
             if not self.params.pre_emb:
@@ -69,7 +69,7 @@ class Model(object):
                 embedding = tf.get_variable("word_emb",
                                             dtype=tf.float32,
                                             initializer=np.asarray(
-                                                load_word2vec(self.params.pre_emb, id_to_word),
+                                                load_word2vec(self.params.pre_emb, word_to_id),
                                             dtype=np.float32))
 
         x = tf.nn.embedding_lookup(embedding, inputs)
@@ -101,7 +101,7 @@ class Model(object):
             )
             backward_output = tf.reverse_sequence(backward_output, length64, seq_dim=1)
             # concat forward and backward outputs into a 2*hiddenSize vector
-            outputs = tf.concat(2, [forward_output, backward_output])
+            outputs = tf.concat([forward_output, backward_output], 2)
             lstm_features = tf.reshape(outputs, [-1, self.params.word_hidden_dim * 2])
             return lstm_features
 
@@ -115,7 +115,7 @@ class Model(object):
                 regularizer=tf.contrib.layers.l2_regularizer(0.001))
             b1 = tf.get_variable(
                 'b1', [tag_num])
-            scores = tf.batch_matmul(lstm_features, w1) + b1
+            scores = tf.matmul(lstm_features, w1) + b1
             scores = tf.reshape(scores, [-1, self.params.word_max_len, tag_num])
             return scores
 
@@ -179,17 +179,20 @@ class Model(object):
             total_labels += batch_total
         return total_correct / total_labels
 
+    # 2017/06/16
     def predict(self, sess, data):
         results = []
         trans = self.trans.eval()
-        for batch in data.iter_batch():
+        for batch in data.iter_batch():     # batch sentence 
             tags = batch["tags"]
             lengths = batch["len"]
             str_lines = batch["str_lines"]
             end_of_doc = batch["end_of_doc"]
             scores = self.run_step(sess, False, batch)
             batch_paths = self.decode(scores, lengths, trans)
-            for i in range(len(batch)):
+            
+#            print ('batch len', len(batch))
+            for i in range(len(tags)):
                 result = []
                 for char, gold, pred in zip(str_lines[i][:lengths[i]],
                                             tags[i][:lengths[i]],
